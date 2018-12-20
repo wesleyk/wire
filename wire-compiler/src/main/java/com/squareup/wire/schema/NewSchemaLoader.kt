@@ -107,6 +107,7 @@ class NewSchemaLoader(
 
   private fun load(locationAndPath: LocationAndPath) {
     val protoFile = locationAndPath.parse()
+    println("parsed file: $protoFile")
     val importPath = protoFile.importPath()
 
     if (locationAndPath.location.path() != importPath
