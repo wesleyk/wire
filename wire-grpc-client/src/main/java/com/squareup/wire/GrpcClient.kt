@@ -18,12 +18,11 @@ package com.squareup.wire
 import com.squareup.wire.GrpcEncoding.Companion.toGrpcEncoding
 import com.squareup.wire.GrpcMethod.Companion.toGrpc
 import com.squareup.wire.internal.invokeSuspending
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -38,7 +37,6 @@ import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import kotlin.coroutines.Continuation
-import kotlin.coroutines.CoroutineContext
 import kotlin.reflect.KClass
 
 internal val APPLICATION_GRPC_MEDIA_TYPE: MediaType = MediaType.get("application/grpc")
@@ -59,17 +57,17 @@ class GrpcClient private constructor(
             return when (val grpcMethod = methodToService[method] as GrpcMethod<*, *>) {
               is GrpcMethod.RequestResponse -> {
                 continuation.invokeSuspending {
-                  grpcMethod.invoke(continuation.context, this@GrpcClient, parameter = args[0])
+                  grpcMethod.invoke(continuation, this@GrpcClient, parameter = args[0])
                 }
               }
               is GrpcMethod.StreamingResponse -> {
-                grpcMethod.invoke(continuation.context, this@GrpcClient, parameter = args[0])
+                grpcMethod.invoke(continuation, this@GrpcClient, parameter = args[0])
               }
               is GrpcMethod.StreamingRequest -> {
-                grpcMethod.invoke(continuation.context, this@GrpcClient)
+                grpcMethod.invoke(continuation, this@GrpcClient)
               }
               is GrpcMethod.FullDuplex -> {
-                grpcMethod.invoke(continuation.context, this@GrpcClient)
+                grpcMethod.invoke(continuation, this@GrpcClient)
               }
             }
           }
@@ -98,11 +96,11 @@ class GrpcClient private constructor(
 
   internal fun <S, R> call(
     grpcMethod: GrpcMethod<S, R>,
-    context: CoroutineContext,
+    continuation: Continuation<Any>,
     requestChannel: ReceiveChannel<S>,
     responseChannel: SendChannel<R>
   ) {
-    val scope = CoroutineScope(context)
+    val scope = CoroutineScope(continuation.context)
     // Create a duplex request body. It allows us to write request messages even after the response
     // status, headers, and body have been received.
     val requestBody =
@@ -116,6 +114,12 @@ class GrpcClient private constructor(
         .addHeader("grpc-accept-encoding", "gzip")
         .method("POST", requestBody)
         .build())
+
+    if (continuation is CancellableContinuation) {
+      continuation.invokeOnCancellation {
+        call.cancel()
+      }
+    }
 
     // Stream messages from the request channel to the request body stream. This means:
     // 1. read a message (non blocking, suspending code)
